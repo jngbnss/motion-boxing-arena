@@ -80,6 +80,11 @@ export class PoseTracker {
     this.video = document.createElement('video');
     this.video.playsInline = true;
     this.video.muted = true;
+    // 화면 전환으로 video를 DOM에서 떼거나 옮기면 브라우저가 재생을 멈춘다(HTML 사양).
+    // 멈추면 requestVideoFrameCallback도 오지 않아 캘리브레이션·게임 입력이 정지하므로 카메라가 열려 있는 동안은 즉시 다시 재생한다.
+    this.video.addEventListener('pause', () => {
+      if (this.stream) void this.video.play().catch(() => undefined);
+    });
   }
 
   get isOpen(): boolean {
