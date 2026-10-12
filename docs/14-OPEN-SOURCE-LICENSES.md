@@ -23,12 +23,12 @@
 | zod | 확인 필요 | MIT(확인 필요) | C+S | 고지 | 낮음 |
 | PostgreSQL | 16+ (확인 필요) | PostgreSQL License | S(컨테이너) | 없음 | 낮음 |
 | MinIO | 확인 필요 | **AGPL-3.0** | 개발 환경 컨테이너 전용 | 수정·네트워크 배포 시 소스 공개 의무 → **수정하지 않고 dev에서만 사용**, 운영은 Cloudflare R2 | 중간(운영 사용 시) |
-| rembg | 확인 필요 | MIT(확인 필요) | S(AI 워커) | 고지. 내부 U²-Net 가중치 라이선스 별도 확인 | 낮음 |
+| rembg | 2.0.85 | MIT | S(AI 워커) | 고지. U²-Net 가중치(u2net.onnx)는 첫 실행 시 내려받음, 라이선스 별도 확인 필요 | 낮음 |
 | BiRefNet | 확인 필요 | MIT(확인 필요) | W | 고지 | 낮음 |
 | TRELLIS (v1) | 확인 필요 | MIT(확인 필요) | W+S | 고지 | 낮음 |
 | TRELLIS.2 | 확인 필요 | MIT(모델·코드) | W+S | 고지. **의존성 nvdiffrast/nvdiffrec은 NVlabs 별도 라이선스**(NVIDIA Source Code License 계열은 일반적으로 비상업 조건, **확인 필요**). FlexGEMM·CuMesh·O-Voxel 라이선스 미기재 | **중간**: 비상업 교육용이면 허용될 가능성이 높으나(추정) 상업화 시 재검토 |
 | SPAR3D / SF3D | 확인 필요 | Stability AI Community License | W+S | 연매출 US$1M 미만 무료, 초과 시 엔터프라이즈 라이선스. 고지 | 낮음(현재) |
-| TripoSR | 확인 필요 | MIT(추정, 확인 필요) | W+S | 고지 | 낮음 |
+| TripoSR | 커밋 107cefd (vendored) | MIT (원문 `workers/ai/src/mba_worker/vendor/tsr/LICENSE`) | W+S(AI 워커, **채택**) | 고지. torchmcubes를 scikit-image(BSD-3)로 교체. 가중치 HF `stabilityai/TripoSR` | 낮음 |
 | **Hunyuan3D 2.x** | 2.1 | Tencent Hunyuan 3D Community License | **사용 금지** | Territory가 "the worldwide territory, excluding the territory of the European Union, United Kingdom and South Korea"(1.l항). Territory 밖 사용은 무라이선스(5(c)항). 호스팅된 Space 호출도 포함 | **사용 불가** |
 | UniRig | 확인 필요 | MIT | W+S(실험군) | 고지 | 낮음 |
 | Make-It-Animatable | 확인 필요 | MIT | W+S | 고지. 학습 데이터(Mixamo) 관련 추가 조건이 있는지 **확인 필요** | 낮음~중간 |

@@ -5,19 +5,39 @@
 웹캠으로 실제 펀치·가드·회피 동작을 인식하고, 2D 그림으로 만든 3D 캐릭터로
 AI 또는 다른 사용자와 **1인칭 복싱**을 하는 웹 기반 3D 게임입니다.
 
-> **현재 상태 (2026-10-12): MVP -1 · 0 · 1 구현, 웹 데모 배포 중** → <https://jngbnss.github.io/motion-boxing-arena/>
-> 웹캠/키보드/리플레이 입력으로 AI 상대와 1경기 완주가 가능합니다. 온라인 1:1(MVP 2)과 AI 3D 생성(MVP 3)은 아직 구현되지 않았습니다(T0 스킨 모드는 동작). 설계 문서는 [`docs/`](docs/)에 있습니다.
+> **현재 상태 (2026-10-12): MVP -1 ~ 3 구현** · 웹 데모 → <https://jngbnss.github.io/motion-boxing-arena/>
+> 공개 데모는 정적 배포라 AI 대전·T0 스킨만 동작합니다. 온라인 1:1과 AI 3D 생성은 게임 서버·GPU 워커가 필요하며, 아직 공개 호스팅이 없어 로컬에서 실행합니다(아래). 설계 문서는 [`docs/`](docs/)에 있습니다.
 
 ## 로컬 실행
 
 ```sh
 pnpm install
-pnpm dev          # http://localhost:5173 (웹캠은 localhost 또는 HTTPS에서만 동작)
-pnpm test         # combat · motion · web 단위 테스트
+pnpm dev:server   # 게임 서버 :2567 (REST /api/v1, Colyseus duel 룸, 내장 PGlite DB, 파일은 apps/server/.data)
+pnpm dev          # 웹 :5173 (VITE_API_URL 기본 http://localhost:2567; 웹캠은 localhost 또는 HTTPS에서만 동작)
+pnpm test         # combat · motion · server · web 테스트
 pnpm typecheck
 ```
 
-`main` 푸시마다 GitHub Actions가 CI(타입체크·테스트·빌드)를 돌리고 GitHub Pages에 배포합니다.
+- **온라인 1:1**: 로비 → 방 만들기 → 초대 링크(`?room=CODE`)를 다른 탭/PC에서 열기. 같은 브라우저 두 탭은 게스트 세션(localStorage)을 공유합니다.
+- **서버 환경 변수**: `PORT`, `DATA_DIR`, `DATABASE_URL`(없으면 PGlite), `PUBLIC_BASE_URL`, `CORS_ORIGINS`, `AUTH_SECRET`, `WORKER_SECRET`, `SIM_LATENCY_MS`/`SIM_JITTER_MS`(지연 재현), `REWIND_GRACE_MS`. 배포용 `apps/server/Dockerfile` 포함.
+- **정적 빌드에서 서버 연결**: `VITE_API_URL=https://<서버> pnpm --filter @mba/web build`. 비우면 온라인·생성 UI는 "서버 미설정"으로 비활성화됩니다.
+
+### AI 생성 워커 (`workers/ai`)
+
+Python 3.12 + [uv](https://docs.astral.sh/uv/). 이미지 → 배경 제거(rembg) → TripoSR(MIT) 3D 메쉬 → 정리·정규화(키 1.8 m, +Y up, 정면 +Z) → `mba-humanoid-v1` 22본 템플릿 리깅 → 검증(T2 smooth / T1 rigid, 실패 시 웹은 T0 유지) → 스킨 GLB + 썸네일 + 팔레트.
+
+```sh
+cd workers/ai
+uv sync                      # CUDA 13.0 torch(드라이버 ≥ 580). CUDA가 없으면 CPU로 동작(느림)
+uv run pytest -q             # 순수 로직 테스트 (GPU 불필요)
+uv run mba-worker --api http://localhost:2567 --secret dev-worker-secret   # 서버 작업 처리 (2초 폴링)
+uv run mba-worker once --image samples/boxer_apose.png --out out/boxer.glb  # 서버 없이 1장 처리
+```
+
+- RTX 4050 6GB 기준 작업당 약 12초(모델 로드 약 17초는 시작 시 1회), VRAM 피크 약 3 GiB. 첫 실행은 TripoSR·U²-Net·MediaPipe 가중치를 내려받습니다.
+- 좋은 입력: 정면·전신·팔이 몸통에서 떨어진 A/T 포즈, 단순한 배경. 팔이 몸에 붙은 그림은 T1(rigid), 비정형 포즈는 실패(T0)가 됩니다.
+
+`main` 푸시마다 GitHub Actions가 CI(타입체크·테스트·빌드)를 돌리고 GitHub Pages에 웹을 배포합니다.
 
 ---
 
@@ -94,8 +114,8 @@ flowchart LR
 | MVP -1 | 모노레포, 공유 계약(타입·스키마) 동결 | 완료 |
 | MVP 0 | 3D 경기장, 기본 복서, 키보드 조작, 타격 판정, AI 상대 | 완료 |
 | MVP 1 | 웹캠 인식(잽·스트레이트·가드·좌우 회피), 캘리브레이션, 스킨 모드 | 완료 |
-| MVP 2 | 온라인 1:1, 게임 룸, 서버 판정, 재접속 | 계획 |
-| MVP 3 | 이미지 업로드, AI 3D 생성, 리깅, 게임 적용 | 계획 (W1~W2 PoC 병행) |
+| MVP 2 | 온라인 1:1, 게임 룸, 서버 판정, 재접속 | 완료 (로컬 서버, 공개 호스팅 미정) |
+| MVP 3 | 이미지 업로드, AI 3D 생성, 리깅, 게임 적용 | 완료 (로컬 GPU 워커, TripoSR) |
 | MVP 4 | 정확도·성능 개선 측정, UX, 테스트 자동화 | 계획 |
 | 확장 | 훅·어퍼컷·숙이기, 랭킹, 종목 확장, 홀로그램 출력 | 범위 밖 |
 

@@ -1,6 +1,6 @@
 # 00. 프로젝트 개요
 
-> 상태: **설계 단계**. 이 문서의 어떤 기능도 아직 구현되지 않았다.
+> 상태: **MVP -1 ~ 3 구현**(2026-10-12). 실행 방법과 현황은 루트 README를 따른다.
 > 모든 결정의 근거는 [`designs/motion-boxing-arena.md`](designs/motion-boxing-arena.md)(결정 기록)에 있다.
 
 ## 한 줄 요약

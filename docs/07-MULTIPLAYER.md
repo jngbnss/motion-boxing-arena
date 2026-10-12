@@ -1,6 +1,6 @@
 # 07. 실시간 멀티플레이어 설계
 
-> 상태: 설계 (미구현). 기준 문서: `docs/designs/motion-boxing-arena.md`의 C2, C6, C7, C8.
+> 상태: 구현(`apps/server/src/realtime`, `apps/web/src/net`, `apps/web/src/game/OnlineSession.ts`). 기준 문서: `docs/designs/motion-boxing-arena.md`의 C2, C6, C7, C8.
 > 스택: Colyseus 0.18(서버, MIT), @colyseus/sdk 0.18(클라이언트, MIT). `colyseus.js`는 0.16.22에서 멈췄으므로 사용하지 않는다.
 
 ---

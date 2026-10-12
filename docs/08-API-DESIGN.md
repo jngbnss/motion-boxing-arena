@@ -1,6 +1,6 @@
 # 08. API 및 이벤트 설계
 
-> 상태: 설계 (미구현). 기준: `docs/designs/motion-boxing-arena.md`의 C2, C5, C7, C9.
+> 상태: 구현(`apps/server/src/http`). 업로드는 presigned S3 대신 §2.2의 multipart 직접 업로드 + 로컬 파일 저장(`/files/*`)을 쓴다. 워커는 DB 직접 폴링 대신 내부 API(`/internal/v1`, `packages/shared/src/api.ts`)로 작업을 점유한다. 기준: `docs/designs/motion-boxing-arena.md`의 C2, C5, C7, C9.
 > 스키마 원본은 `packages/shared`의 zod 정의다. 이 문서의 TypeScript 표기는 그 스키마를 설명용으로 옮긴 것이다.
 
 ---

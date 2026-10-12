@@ -1,7 +1,7 @@
 # 09. 데이터 모델
 
-> 상태: 설계 (미구현). 기준: `docs/designs/motion-boxing-arena.md`의 C3, C5, C9.
-> DB: PostgreSQL 16 (추정 버전, 구현 시 확정), ORM: Drizzle. 스토리지: S3 호환(dev MinIO / prod Cloudflare R2).
+> 상태: 구현(`apps/server/src/db/migrations.ts`). 기준: `docs/designs/motion-boxing-arena.md`의 C3, C5, C9.
+> DB: PostgreSQL SQL — `DATABASE_URL`이 있으면 `pg`, 없으면 내장 PGlite. ORM 없이 SQL 직접 사용. 스토리지: 로컬 파일 시스템(`DATA_DIR/files`, §6 레이아웃 동일). S3 호환 스토리지는 배포 시 검토.
 
 ---
 

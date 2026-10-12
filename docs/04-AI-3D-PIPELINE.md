@@ -1,7 +1,7 @@
 # 04. AI 2D→3D 캐릭터 생성 파이프라인
 
 > 기준 문서: [designs/motion-boxing-arena.md](designs/motion-boxing-arena.md) (Approach B + T0/T1/T2 등급)
-> 확인일 2026-10-12. "추정"과 "확인 필요"는 PoC나 원문 확인이 필요한 항목이다. 아직 구현된 것은 없다.
+> 확인일 2026-10-12. "추정"과 "확인 필요"는 PoC나 원문 확인이 필요한 항목이다. 구현: `workers/ai` (TripoSR + 템플릿 리깅, 로컬 GPU).
 
 ---
 
