@@ -74,8 +74,9 @@ export interface ProceduralBoxerOptions {
 
 export class ProceduralBoxer implements BoxerAvatar {
   readonly object = new THREE.Group();
-  private readonly body = new THREE.Group();
-  private readonly bones = {} as Record<BoneName, THREE.Bone>;
+  /** 본을 담는 몸체 그룹 (KO 쓰러짐·러지 이동). GltfBoxer가 리타깃 원본으로 읽는다 */
+  readonly body = new THREE.Group();
+  readonly bones = {} as Record<BoneName, THREE.Bone>;
   private readonly gloveMats: Record<'left' | 'right', THREE.MeshStandardMaterial>;
   private readonly stance: Stance;
   private strikes: Record<Hand, StrikeTimeline | null> = { lead: null, rear: null };
@@ -159,7 +160,17 @@ export class ProceduralBoxer implements BoxerAvatar {
   }
 
   async load(): Promise<void> {
-    /* 절차적 모델: 로딩할 에셋 없음. GLB 아바타(T1/T2)는 같은 인터페이스로 추가 예정 */
+    /* 절차적 모델: 로딩할 에셋 없음. GLB 아바타(T1/T2)는 GltfBoxer */
+  }
+
+  /** 모든 본을 레스트 자세로 (리타깃 기준 측정용) */
+  restPose(): void {
+    for (const name of BONES) {
+      this.bones[name].quaternion.identity();
+      this.bones[name].position.set(...REST[name].pos);
+    }
+    this.body.position.set(0, 0, 0);
+    this.body.rotation.set(0, 0, 0);
   }
 
   play(action: AvatarAction, opts: { speed?: number; now?: number } = {}): void {

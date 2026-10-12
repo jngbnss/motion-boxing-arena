@@ -1,9 +1,25 @@
-// T0 스킨 캐릭터 생성: 업로드 또는 A-pose 실루엣 템플릿 위에 그리기 → 팔레트 추출 → 기본 복서에 적용 (C13: 항상 먼저 만든다)
+// 캐릭터 생성: 업로드 또는 A-pose 실루엣 템플릿 위에 그리기 → 팔레트 추출 → T0 스킨을 즉시 만든다 (C13: 항상 먼저 만든다).
+// 서버가 설정돼 있고 권리 확인을 했으면 같은 이미지를 업로드해 AI 3D 변환(T1/T2) 작업을 요청하고 진행 상황을 폴링한다.
 import { useEffect, useRef, useState } from 'react';
 import { SKELETON_ID, UPLOAD_LIMITS, type CharacterManifest } from '@mba/shared';
-import { saveCustomCharacter } from '../../characters.ts';
+import { saveCustomCharacter, saveGenerationJob } from '../../characters.ts';
+import { api, ApiError, errorMessage, newIdempotencyKey } from '../../net/api.ts';
+import { featureBlockedReason, useServerConfig } from '../../net/useServerConfig.ts';
+import type { Settings } from '../../settings.ts';
 import { extractPalette, toBoxerPalette } from '../../skin/palette.ts';
 import { BoxerPreview } from '../BoxerPreview.tsx';
+import { GenerationPanel } from '../GenerationPanel.tsx';
+
+/** 생성 요청 오류 → 사용자 문구 (모두 T0로 계속 플레이 가능) */
+function generateErrorMessage(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === 429) return '오늘 AI 생성 횟수(하루 3회)를 모두 썼어요. 만든 T0 스킨으로 플레이하세요.';
+    if (e.code === 'QUEUE_FULL') return '생성 대기열이 가득 찼어요. 잠시 후 다시 시도하거나 T0 스킨으로 플레이하세요.';
+    if (e.code === 'IMAGE_INVALID') return `서버가 이미지를 거절했어요: ${e.message}`;
+    if (e.code === 'RIGHTS_NOT_ATTESTED') return '이미지 권리 확인이 필요해요.';
+  }
+  return `AI 3D 변환을 요청하지 못했어요: ${errorMessage(e)}`;
+}
 
 const W = 512;
 const H = 768;
@@ -86,7 +102,19 @@ function analyze(source: CanvasImageSource, w: number, h: number): { palette: st
   return { palette, decal: d.toDataURL('image/png') };
 }
 
-export function CharacterCreateScreen({ onCreated, onCancel }: { onCreated: (id: string) => void; onCancel: () => void }) {
+export function CharacterCreateScreen({ settings, onCreated, onDone, onCancel }: {
+  settings: Settings;
+  /** 캐릭터 저장·선택 (화면 이동 없음) */
+  onCreated: (id: string) => void;
+  /** 캐릭터 선택 화면으로 */
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const server = useServerConfig();
+  const genBlocked = featureBlockedReason(server, 'generation');
+  const [wantGen, setWantGen] = useState(true);
+  const [gen, setGen] = useState<{ phase: 'idle' | 'uploading' | 'running' | 'error' | 'done'; jobId?: string; estimatedSeconds?: number; error?: string; ready?: CharacterManifest }>({ phase: 'idle' });
+  const sourceBlob = useRef<{ blob: Blob; filename: string } | null>(null);
   const [tab, setTab] = useState<'upload' | 'draw'>('draw');
   const [name, setName] = useState('나의 복서');
   const [rights, setRights] = useState(false);
@@ -163,10 +191,14 @@ export function CharacterCreateScreen({ onCreated, onCancel }: { onCreated: (id:
           return;
         }
         result = analyze(img, img.naturalWidth, img.naturalHeight);
+        sourceBlob.current = { blob: file, filename: file.name };
       } else {
         const c = drawRef.current;
         if (!c) return;
         result = analyze(c, W, H);
+        // 실루엣 밖은 이미 투명(그린 캔버스만 PNG로). 512×768이라 서버 최소 해상도(짧은 변 512)를 만족한다
+        const blob = await new Promise<Blob | null>((resolve) => c.toBlob(resolve, 'image/png'));
+        sourceBlob.current = blob ? { blob, filename: 'drawing.png' } : null;
       }
       const id = `t0-${Date.now().toString(36)}`;
       const manifest: CharacterManifest = {
@@ -189,20 +221,43 @@ export function CharacterCreateScreen({ onCreated, onCancel }: { onCreated: (id:
     }
   };
 
+  const startGeneration = async (t0: CharacterManifest) => {
+    const src = sourceBlob.current;
+    if (!api || !src) return;
+    setGen({ phase: 'uploading' });
+    try {
+      const up = await api.upload(src.blob, src.filename, rights);
+      const res = await api.generate({ uploadId: up.uploadId, name: t0.name.slice(0, 20) }, newIdempotencyKey());
+      saveGenerationJob({ jobId: res.jobId, characterId: res.characterId, t0Id: t0.id, name: t0.name, createdAt: new Date().toISOString() });
+      setGen({ phase: 'running', jobId: res.jobId, estimatedSeconds: res.estimatedSeconds });
+    } catch (e) {
+      setGen({ phase: 'error', error: generateErrorMessage(e) });
+    }
+  };
+
   const save = () => {
     if (!preview) return;
     if (!saveCustomCharacter(preview)) {
       setError('브라우저 저장소에 저장하지 못했어요(비공개 창이거나 용량 초과). 이번 세션에서만 사용할 수 있어요.');
     }
     onCreated(preview.id);
+    if (wantGen && !genBlocked && rights && sourceBlob.current) void startGeneration(preview);
+    else onDone();
+  };
+
+  const onGenReady = (m: CharacterManifest) => {
+    setGen((g) => ({ ...g, phase: 'done', ready: m }));
+    if (settings.autoSwapCharacter) onCreated(m.id);
   };
 
   return (
     <div className="screen">
       <h1>캐릭터 만들기</h1>
       <div className="warn-box" style={{ width: 'min(920px, 100%)' }}>
-        지금은 <b>T0 스킨 모드</b>만 사용할 수 있어요. 그림의 색과 이미지를 기본 복서에 입힙니다(2초 이내).
-        AI 3D 변환(T1/T2)은 생성 서버가 준비되면 추가됩니다.
+        먼저 <b>T0 스킨</b>을 바로 만들어요(그림의 색과 이미지를 기본 복서에 입힘, 2초 이내).{' '}
+        {genBlocked
+          ? <>AI 3D 변환(T1/T2): {genBlocked}</>
+          : <>저장하면 같은 이미지로 <b>AI 3D 변환(T1/T2)</b>도 요청하고, 완성되면 다음 경기부터 3D 캐릭터로 바뀌어요.{server.config && !server.config.workerOnline && ' (지금은 생성 워커가 꺼져 있어 대기열에서 기다립니다.)'}</>}
       </div>
       <div className="card" style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
         <div>
@@ -245,16 +300,38 @@ export function CharacterCreateScreen({ onCreated, onCancel }: { onCreated: (id:
             <input type="checkbox" checked={rights} onChange={(e) => setRights(e.target.checked)} />
             <span style={{ fontSize: 14 }}>이 이미지를 사용할 권리가 저에게 있습니다(직접 그렸거나 사용 허락을 받음). 캐릭터는 비공개로 저장되며 경기 상대에게만 보입니다.</span>
           </label>
-          <button className="primary" onClick={build}>스킨 캐릭터 만들기</button>
+          <label style={{ alignItems: 'flex-start', opacity: genBlocked ? 0.5 : 1 }}>
+            <input type="checkbox" checked={wantGen && !genBlocked} disabled={!!genBlocked || gen.phase !== 'idle'} onChange={(e) => setWantGen(e.target.checked)} data-testid="want-gen" />
+            <span style={{ fontSize: 14 }}>저장할 때 AI 3D 변환(T1/T2)도 요청 (이미지를 생성 서버에 업로드, 하루 3회)</span>
+          </label>
+          <button className="primary" onClick={build} disabled={gen.phase !== 'idle'}>스킨 캐릭터 만들기</button>
           {error && <div className="error-box">{error}</div>}
-          {preview && (
+          {preview && gen.phase === 'idle' && (
             <>
               <BoxerPreview character={preview} height={260} />
               <div className="swatches">{preview.skin?.palette.map((p, i) => <span key={i} className="swatch" style={{ background: p }} />)}</div>
-              <div className="row"><span className="badge T0">T0</span> <button className="primary" onClick={save}>저장하고 선택</button></div>
+              <div className="row"><span className="badge T0">T0</span> <button className="primary" onClick={save}>{wantGen && !genBlocked ? '저장하고 3D 변환 요청' : '저장하고 선택'}</button></div>
             </>
           )}
-          <button className="ghost" onClick={onCancel}>취소</button>
+          {gen.phase !== 'idle' && (
+            <div className="row"><span className="badge T0">T0</span> <span>스킨 캐릭터 저장·선택 완료 — 지금 바로 플레이할 수 있어요.</span></div>
+          )}
+          {gen.phase === 'uploading' && <span className="muted">이미지 업로드·작업 요청 중…</span>}
+          {gen.phase === 'error' && <div className="error-box">{gen.error}<p style={{ margin: '6px 0 0' }}>T0 스킨 캐릭터는 저장돼 있어요.</p></div>}
+          {(gen.phase === 'running' || gen.phase === 'done') && gen.jobId && (
+            <GenerationPanel jobId={gen.jobId} estimatedSeconds={gen.estimatedSeconds ?? 0} onReady={onGenReady} />
+          )}
+          {gen.ready && (
+            <>
+              <BoxerPreview character={gen.ready} height={260} />
+              <div className="row"><span className={`badge ${gen.ready.tier}`}>{gen.ready.tier}</span> <b>{gen.ready.name}</b> {settings.autoSwapCharacter ? '— 선택됨' : <button onClick={() => onCreated(gen.ready!.id)}>이 캐릭터 선택</button>}</div>
+            </>
+          )}
+          {gen.phase === 'idle' ? (
+            <button className="ghost" onClick={onCancel}>취소</button>
+          ) : (
+            <button onClick={onDone}>캐릭터 선택으로</button>
+          )}
         </div>
       </div>
     </div>

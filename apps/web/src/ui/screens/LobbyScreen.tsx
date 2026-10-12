@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import type { CharacterManifest, Difficulty } from '@mba/shared';
+import { featureBlockedReason, type ServerConfigState } from '../../net/useServerConfig.ts';
 import type { Settings } from '../../settings.ts';
 import type { GameInputChoice } from './GameScreen.tsx';
+
+/** 룸 코드: 대문자+숫자 6자리, 혼동 문자(0 O 1 I) 제외 (docs/07 §4.1) */
+const ROOM_CODE_RE = /^[A-HJ-NP-Z2-9]{6}$/;
 
 const DIFFS: Array<{ id: Difficulty; label: string; desc: string }> = [
   { id: 'easy', label: 'Easy', desc: '예비동작 0.7초 + "!" 표시. 처음이라면 여기서' },
@@ -9,15 +13,23 @@ const DIFFS: Array<{ id: Difficulty; label: string; desc: string }> = [
   { id: 'hard', label: 'Hard', desc: '예비동작 0.35초. 빠른 연타' },
 ];
 
-export function LobbyScreen({ settings, character, hasProfile, onSettings, onChangeCharacter, onStart }: {
+export function LobbyScreen({ settings, character, hasProfile, server, onlineBusy, onlineError, onSettings, onChangeCharacter, onStart, onCreateRoom, onJoinRoom }: {
   settings: Settings;
   character: CharacterManifest;
   hasProfile: boolean;
+  server: ServerConfigState;
+  onlineBusy: boolean;
+  onlineError: string | null;
   onSettings: (s: Settings) => void;
   onChangeCharacter: () => void;
   onStart: (choice: GameInputChoice) => void;
+  onCreateRoom: () => void;
+  onJoinRoom: (code: string) => void;
 }) {
   const [replayError, setReplayError] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const blocked = featureBlockedReason(server, 'online');
+  const normCode = code.trim().toUpperCase();
 
   const start = () => {
     if (settings.inputMode === 'webcam') onStart({ kind: 'webcam' });
@@ -67,7 +79,7 @@ export function LobbyScreen({ settings, character, hasProfile, onSettings, onCha
             <input type="file" accept=".jsonl,.ndjson,application/x-ndjson,text/plain" onChange={(e) => onReplay(e.target.files?.[0])} />
           </label>
         </div>
-        {settings.inputMode === 'keyboard' && <p className="muted" style={{ fontSize: 13 }}>J 잽 · K 스트레이트 · Space 가드(유지) · A/D 좌우 회피(유지) · S 숙이기 · ESC 일시정지. 키보드는 AI 대전 전용입니다.</p>}
+        {settings.inputMode === 'keyboard' && <p className="muted" style={{ fontSize: 13 }}>J 잽 · K 스트레이트 · Space 가드(유지) · A/D 좌우 회피(유지) · S 숙이기 · ESC 일시정지. 키보드는 AI 대전용이며, 온라인에서는 개발·시연용으로만 허용됩니다.</p>}
         {settings.inputMode === 'webcam' && <p className="muted" style={{ fontSize: 13 }}>{hasProfile ? '저장된 캘리브레이션을 사용합니다(설정에서 다시 측정 가능).' : '처음 한 번 30초 캘리브레이션을 진행합니다.'}</p>}
         {replayError && <div className="error-box">{replayError}</div>}
         <div className="row" style={{ marginTop: 12 }}>
@@ -77,12 +89,30 @@ export function LobbyScreen({ settings, character, hasProfile, onSettings, onCha
 
       <div className="card">
         <h2>친구와 1:1 대전</h2>
-        <p className="muted">온라인 대전(방 만들기·코드 입력·초대 링크)은 게임 서버가 준비되면 열립니다.</p>
+        {blocked ? (
+          <div className="warn-box row" style={{ justifyContent: 'space-between' }}>
+            <span>{blocked}</span>
+            {server.status === 'offline' && <button onClick={server.retry}>재연결</button>}
+          </div>
+        ) : (
+          <p className="muted">방을 만들고 초대 링크를 보내거나, 친구에게 받은 6자리 코드로 참가하세요. 위에서 고른 입력 방식({settings.inputMode === 'webcam' ? '웹캠' : '키보드'})으로 참가합니다.</p>
+        )}
         <div className="row">
-          <button disabled>방 만들기</button>
-          <input disabled placeholder="방 코드" style={{ width: 120 }} />
-          <button disabled>참가</button>
+          <button className="primary" disabled={!!blocked || onlineBusy} onClick={onCreateRoom}>방 만들기</button>
+          <input
+            disabled={!!blocked || onlineBusy}
+            placeholder="방 코드"
+            value={code}
+            maxLength={6}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            onKeyDown={(e) => { if (e.key === 'Enter' && ROOM_CODE_RE.test(normCode)) onJoinRoom(normCode); }}
+            style={{ width: 120, textTransform: 'uppercase', letterSpacing: 2 }}
+            aria-label="방 코드"
+          />
+          <button disabled={!!blocked || onlineBusy || !ROOM_CODE_RE.test(normCode)} onClick={() => onJoinRoom(normCode)}>참가</button>
+          {onlineBusy && <span className="muted">접속 중…</span>}
         </div>
+        {onlineError && <div className="error-box" style={{ marginTop: 10 }}>{onlineError}</div>}
       </div>
     </div>
   );

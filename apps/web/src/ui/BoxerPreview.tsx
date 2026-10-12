@@ -2,7 +2,7 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { CharacterManifest } from '@mba/shared';
-import { ProceduralBoxer } from '../avatar/ProceduralBoxer.ts';
+import { createAvatar } from '../avatar/createAvatar.ts';
 
 export function BoxerPreview({ character, height = 320, punch = true }: { character: CharacterManifest; height?: number; punch?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -31,8 +31,10 @@ export function BoxerPreview({ character, height = 320, punch = true }: { charac
     const rim = new THREE.DirectionalLight('#ff4d3a', 1.5);
     rim.position.set(-3, 2, -2);
     scene.add(rim);
-    const boxer = new ProceduralBoxer(character);
+    const boxer = createAvatar(character);
     scene.add(boxer.object);
+    // T1/T2 GLB는 비동기 로드 (실패 시 스킨 팔레트 기본 복서로 대체)
+    void boxer.load();
 
     const resize = () => {
       const w = el.clientWidth || 300;

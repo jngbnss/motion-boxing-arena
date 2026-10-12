@@ -11,13 +11,15 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@colyseus/sdk": "0.18.5",
     "@mba/combat": "workspace:*",
     "@mba/motion": "workspace:*",
     "@mba/shared": "workspace:*",
     "@mediapipe/tasks-vision": "1.1.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "three": "0.186.1"
+    "three": "0.186.1",
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@types/react": "19.3.0",

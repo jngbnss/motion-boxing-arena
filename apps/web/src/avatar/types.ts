@@ -35,6 +35,8 @@ export interface BoxerAvatar {
   setGuardWeight(w: number): void;
   /** 디버그 표시용 정규 볼륨 */
   getHitVolumes(): HitVolumes;
+  /** 지금 예비동작 중인 손이 있는가 (HUD "!" 표시용) */
+  isTelegraphing(now: number): boolean;
   update(dt: number, now: number): void;
   dispose(): void;
 }

@@ -3,19 +3,16 @@
 import * as THREE from 'three';
 import { AiBrain, COMBAT_RULES, CombatSim, mulberry32, STRIKES, type ActiveStrike, type CombatEvent } from '@mba/combat';
 import { MIN_STRIKE_CONFIDENCE, type CharacterManifest, type Difficulty, type FighterStats, type MatchPhase, type PauseReason, type PoseState } from '@mba/shared';
-import { ProceduralBoxer } from '../avatar/ProceduralBoxer.ts';
-import type { StrikeTimeline } from '../avatar/types.ts';
+import type { BoxerAvatar, StrikeTimeline } from '../avatar/types.ts';
 import type { InputDiagnostics, InputSource } from '../input/types.ts';
-import { buildArena } from '../render/Arena.ts';
-import { Sparks } from '../render/Effects.ts';
-import { FirstPersonRig } from '../render/FirstPersonRig.ts';
-import { SingleViewOutput, type ViewOutput } from '../render/ViewOutput.ts';
+import type { FirstPersonRig } from '../render/FirstPersonRig.ts';
+import type { Sparks } from '../render/Effects.ts';
 import type { Settings } from '../settings.ts';
 import { LocalMatch, type MatchOutcome } from './LocalMatch.ts';
+import { MatchScene } from './MatchScene.ts';
 
 export const PLAYER = 'player';
 export const AI = 'ai';
-const OPPONENT_DISTANCE = 1.1;
 const STEP_MS = 1000 / COMBAT_RULES.simHz;
 
 export interface HudEvent {
@@ -48,6 +45,21 @@ export interface HudSnapshot {
   defense: string;
   /** 인식된 펀치 이벤트 로그 (최근 20개, 디버그 오버레이) */
   motionLog: MotionLogEntry[];
+  /** 온라인 대전 전용 (싱글은 undefined). playerHp/aiHp = 나/상대, stats.player/ai = 나/상대 */
+  online?: OnlineHud;
+}
+
+export interface OnlineHud {
+  rttMs: number;
+  connection: 'connected' | 'reconnecting' | 'closed';
+  opponentName: string;
+  opponentConnected: boolean;
+  /** 상대가 룸을 떠남(결과 화면 이후 등) */
+  opponentLeft: boolean;
+  pause: { reason: PauseReason; byMe: boolean; deadlineLeftMs: number; budgetLeftMs: number } | null;
+  rematchRequested: boolean;
+  /** 서버 error 메시지 등 안내 */
+  notice: string | null;
 }
 
 export interface MotionLogEntry {
@@ -87,13 +99,9 @@ function timeline(s: ActiveStrike, offset: number): StrikeTimeline {
 }
 
 export class GameSession {
-  private readonly view: ViewOutput;
-  private readonly scene = new THREE.Scene();
+  private readonly stage: MatchScene;
   private readonly fp: FirstPersonRig;
-  private readonly opponent: ProceduralBoxer;
-  private readonly sparks = new Sparks();
-  private readonly disposeArena: () => void;
-  private readonly resizeObserver: ResizeObserver;
+  private readonly sparks: Sparks;
   private sim!: CombatSim;
   private ai!: AiBrain;
   private match = new LocalMatch();
@@ -124,23 +132,9 @@ export class GameSession {
 
   constructor(private opts: GameSessionOptions) {
     this.seed = opts.seed ?? Math.floor(Math.random() * 2 ** 31);
-    this.view = new SingleViewOutput();
-    opts.container.appendChild(this.view.domElement);
-    this.disposeArena = buildArena(this.scene);
-
-    const gloveColor = opts.player.skin?.palette[3] ?? '#e8231a';
-    this.fp = new FirstPersonRig(opts.settings.stance, gloveColor);
-    this.fp.shake = opts.settings.cameraShake;
-    this.scene.add(this.fp.rig);
-
-    this.opponent = new ProceduralBoxer(opts.opponent, { stance: 'orthodox' });
-    this.opponent.object.position.set(0, 0, -OPPONENT_DISTANCE);
-    this.scene.add(this.opponent.object);
-    this.scene.add(this.sparks.points);
-
-    this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.resizeObserver.observe(opts.container);
-    this.resize();
+    this.stage = new MatchScene({ container: opts.container, player: opts.player, opponent: opts.opponent, stance: opts.settings.stance, cameraShake: opts.settings.cameraShake });
+    this.fp = this.stage.fp;
+    this.sparks = this.stage.sparks;
     this.resetMatch();
   }
 
@@ -155,12 +149,8 @@ export class GameSession {
     this.fp.reset();
   }
 
-  private resize(): void {
-    const w = this.opts.container.clientWidth || 1;
-    const h = this.opts.container.clientHeight || 1;
-    this.view.resize(w, h);
-    this.fp.camera.aspect = w / h;
-    this.fp.camera.updateProjectionMatrix();
+  private get opponent(): BoxerAvatar {
+    return this.stage.opponent;
   }
 
   subscribe(l: Listener): () => void {
@@ -278,17 +268,13 @@ export class GameSession {
     // 렌더
     this.fp.setHeadOffset(this.playerPose.headX, this.playerPose.headY);
     this.fp.setGuardWeight(this.playerPose.guard);
-    if (phase !== 'PAUSED') {
-      this.fp.update(dt, this.animNow);
-      this.opponent.update(dt, this.animNow);
-      this.sparks.update(dt);
-    }
-    this.view.render(this.scene, this.fp.camera);
+    if (phase !== 'PAUSED') this.stage.animate(dt, this.animNow);
+    this.stage.render();
     if (now - this.lastEmit > 50) this.emit(now, false);
   }
 
   private handleEvent(ev: CombatEvent, offset: number, real: number): void {
-    const head = new THREE.Vector3(0, 1.63, -OPPONENT_DISTANCE + 0.02);
+    const head = this.stage.opponentHead();
     switch (ev.kind) {
       case 'strike_start': {
         const tl = timeline(ev.strike, offset);
@@ -376,14 +362,8 @@ export class GameSession {
     this.running = false;
     cancelAnimationFrame(this.raf);
     window.removeEventListener('keydown', this.onKey);
-    this.resizeObserver.disconnect();
     this.opts.input.stop();
-    this.opponent.dispose();
-    this.fp.dispose();
-    this.sparks.dispose();
-    this.disposeArena();
-    this.view.dispose();
-    this.view.domElement.remove();
+    this.stage.dispose();
     this.listeners.clear();
   }
 }
