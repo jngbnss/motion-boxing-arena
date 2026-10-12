@@ -2,6 +2,7 @@
 // 순수 TS, 결정적: 시간은 항상 인자로 받는다(Date.now/performance.now 금지). 난수는 주입한다.
 import type { Difficulty, FighterStats, Hand, PoseState, StrikeType } from '@mba/shared';
 import type { StrikeRejectReason } from '@mba/shared';
+import type { AiDifficultySpec } from './constants.ts';
 
 export type FighterId = string;
 
@@ -86,6 +87,8 @@ export interface AiBrainOptions {
   difficulty: Difficulty;
   /** [0,1) 난수. 테스트는 시드 고정 PRNG 주입 */
   random: () => number;
+  /** 난이도 값 일부 덮어쓰기 (튜닝·테스트용) */
+  spec?: Partial<AiDifficultySpec>;
 }
 
 export interface AiBrainApi {

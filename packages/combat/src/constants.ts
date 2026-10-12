@@ -34,7 +34,11 @@ export const COMBAT_RULES = {
 export interface AiDifficultySpec {
   /** C10 telegraph: startup 앞에 붙는 예비동작 */
   telegraphMs: number;
-  /** 플레이어 펀치 시작을 인지하기까지 */
+  /**
+   * 플레이어 펀치 시작(strike_start)부터 회피·가드 동작까지.
+   * 플레이어 펀치 startup이 100~160ms라 이보다 짧아야 회피가 성립한다
+   * (easy는 straight만, normal/hard는 jab도 피할 수 있다).
+   */
   reactionMs: number;
   /** 플레이어 펀치에 대해 회피 시도 확률 */
   dodgeProb: number;
@@ -47,7 +51,7 @@ export interface AiDifficultySpec {
 }
 
 export const AI_DIFFICULTY: Readonly<Record<Difficulty, AiDifficultySpec>> = {
-  easy: { telegraphMs: 700, reactionMs: 450, dodgeProb: 0.15, guardProb: 0.25, attackIntervalMs: [1800, 3000], comboMax: 1 },
-  normal: { telegraphMs: 500, reactionMs: 300, dodgeProb: 0.3, guardProb: 0.35, attackIntervalMs: [1200, 2200], comboMax: 2 },
-  hard: { telegraphMs: 350, reactionMs: 180, dodgeProb: 0.45, guardProb: 0.4, attackIntervalMs: [800, 1500], comboMax: 3 },
+  easy: { telegraphMs: 700, reactionMs: 140, dodgeProb: 0.15, guardProb: 0.25, attackIntervalMs: [1800, 3000], comboMax: 1 },
+  normal: { telegraphMs: 500, reactionMs: 90, dodgeProb: 0.3, guardProb: 0.35, attackIntervalMs: [1200, 2200], comboMax: 2 },
+  hard: { telegraphMs: 350, reactionMs: 60, dodgeProb: 0.45, guardProb: 0.4, attackIntervalMs: [800, 1500], comboMax: 3 },
 };
