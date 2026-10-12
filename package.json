@@ -5,6 +5,7 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "dev": "pnpm --filter @mba/web dev",
+    "dev:server": "pnpm --filter @mba/server dev",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck"

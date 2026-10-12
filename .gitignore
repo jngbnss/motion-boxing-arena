@@ -7,3 +7,4 @@ coverage/
 .DS_Store
 .gstack/
 tools/datasets/recordings/*.jsonl
+.data/
