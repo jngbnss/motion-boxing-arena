@@ -88,7 +88,8 @@ export function App() {
     setOnlineBusy(true);
     setOnlineError(null);
     try {
-      const opts = { characterId: toNetCharacterId(character), inputKind };
+      // 선택 상태가 오래됐을 수 있다(세션 재발급·서버 변경으로 서버 캐릭터 캐시가 정리됨). 참가 직전에 저장소 기준으로 다시 해석한다
+      const opts = { characterId: toNetCharacterId(findCharacter(characterId)), inputKind };
       const d = intent.kind === 'create'
         ? await DuelConnection.create(api, opts)
         : intent.kind === 'join'
