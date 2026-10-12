@@ -1,0 +1,48 @@
+[project]
+name = "mba-worker"
+version = "0.1.0"
+description = "Motion Boxing Arena AI 생성 워커: 이미지 → 리깅된 GLB (TripoSR + 템플릿 리깅)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "torch==2.14.1",
+  # TripoSR 체크포인트는 transformers 4.x ViT 키 이름(encoder.layer.N.attention.attention.query)을 쓴다 → 5.x 불가
+  "transformers==4.57.6",
+  "omegaconf==2.4.0",
+  "einops==0.8.2",
+  "huggingface-hub==0.36.2",
+  "rembg==2.0.85",
+  "onnxruntime==1.31.0",
+  "mediapipe==1.1.0",
+  "numpy==2.5.4",
+  "scipy==1.18.1",
+  "scikit-image==0.26.0",
+  "trimesh==5.1.1",
+  "fast-simplification==0.2.0",
+  "pygltflib==1.16.5",
+  "pillow==12.3.0",
+  "httpx==0.28.1",
+]
+
+[project.scripts]
+mba-worker = "mba_worker.cli:main"
+
+[dependency-groups]
+dev = ["pytest==9.1.1"]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+# CUDA 13.0 휠 (드라이버 591.74 = CUDA 13.1 지원). CUDA 가 없으면 같은 휠이 CPU 로 동작한다
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# scikit-image 0.26 마칭 큐브 내부의 NumPy 2.5 deprecation 경고 (동작 영향 없음)
+filterwarnings = ["ignore:Setting the shape on a NumPy array:DeprecationWarning"]

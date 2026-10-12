@@ -1,0 +1,9 @@
+TripoSR (tsr package) — vendored from https://github.com/VAST-AI-Research/TripoSR
+Commit: 107cefdc244c39106fa830359024f6a2f1c78871
+License: MIT (see LICENSE in this directory, Copyright (c) 2024 Tripo AI & Stability AI)
+Model weights are NOT included; they are downloaded at runtime from https://huggingface.co/stabilityai/TripoSR (MIT).
+
+Modifications by mba-worker:
+- models/isosurface.py: torchmcubes (fails to build on Windows) replaced with scikit-image marching cubes (CPU).
+- utils.py: find_class() maps config class paths "tsr.*" to this vendored package; removed imageio/save_video (unused).
+- __init__.py files added; bake_texture.py (xatlas/moderngl) not vendored.
