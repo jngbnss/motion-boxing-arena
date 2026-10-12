@@ -1,9 +1,11 @@
 // 1인칭 카메라 리그: 자기 글러브 + 전완만 표시 (docs/10 §3). 머리 오프셋은 감쇠 스프링으로 카메라에만 반영(C11).
 import * as THREE from 'three';
-import { CAMERA_SPRING_OMEGA, HEAD_CAMERA_OFFSET_SCALE, NEUTRAL_HEAD_POS, type Hand, type Stance } from '@mba/shared';
-import { strikeExtension } from '../avatar/ProceduralBoxer.ts';
+import { CAMERA_SPRING_OMEGA, HEAD_CAMERA_OFFSET_SCALE, NEUTRAL_HEAD_POS, type Hand, type Skin, type Stance } from '@mba/shared';
+import { ARM_SKIN_T, strikeExtension } from '../avatar/ProceduralBoxer.ts';
 import type { StrikeTimeline } from '../avatar/types.ts';
 import { clamp, Spring2 } from '../game/spring.ts';
+import { applyBodySkin, bodySkinMaterial, loadBodySkin, setTemplateUv } from '../skin/bodySkin.ts';
+import { armPoint } from '../skin/bodyTemplate.ts';
 
 const SKIN = '#e0b48f';
 const MAX_ROLL = (5 * Math.PI) / 180;
@@ -23,12 +25,17 @@ export class FirstPersonRig {
   private koAt: number | null = null;
   shake = 1;
 
-  constructor(private stance: Stance, gloveColor: string) {
+  private disposables: Array<{ dispose(): void }> = [];
+  private disposed = false;
+
+  constructor(private stance: Stance, skin: Skin | undefined) {
     this.camera = new THREE.PerspectiveCamera(70, 1, 0.03, 60);
     this.rig.position.set(NEUTRAL_HEAD_POS.x, NEUTRAL_HEAD_POS.y, 0.02);
     this.rig.add(this.camera);
-    const gloveMat = new THREE.MeshStandardMaterial({ color: gloveColor, roughness: 0.35 });
-    const armMat = new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.7 });
+    const bodyUrl = skin?.decals?.body;
+    const mat = (p: THREE.MeshStandardMaterialParameters) => (bodyUrl ? bodySkinMaterial(p) : new THREE.MeshStandardMaterial(p));
+    const gloveMat = mat({ color: skin?.palette[3] ?? '#e8231a', roughness: 0.35 });
+    const armMat = mat({ color: SKIN, roughness: 0.7 });
     const mkGlove = () => {
       const m = new THREE.Mesh(new THREE.SphereGeometry(0.075, 24, 18), gloveMat);
       m.scale.set(1, 0.92, 1.2);
@@ -40,6 +47,25 @@ export class FirstPersonRig {
     for (const s of ['left', 'right'] as const) {
       this.camera.add(this.gloves[s]);
       this.camera.add(this.forearms[s]);
+    }
+    if (bodyUrl) {
+      // 전신 스킨의 팔 구간을 입힌다. 화면 왼쪽 손 = 내 왼손 = 템플릿(정면 그림)의 오른쪽 팔
+      const id = new THREE.Matrix4();
+      for (const s of ['left', 'right'] as const) {
+        const side = s === 'left' ? 1 : -1;
+        // 글러브: 카메라 쪽(+z) = 손목, 먼 쪽(-z) = 주먹 끝
+        setTemplateUv(this.gloves[s].geometry, id, (p) => armPoint(side, ARM_SKIN_T.glove + (1 - ARM_SKIN_T.glove) * (0.5 - p.z / 0.15), p.y / 0.075));
+        // 전완: 로컬 -y 끝 = 손목(글러브 쪽), +y 끝 = 팔꿈치
+        setTemplateUv(this.forearms[s].geometry, id, (p) => armPoint(side, ARM_SKIN_T.glove - (ARM_SKIN_T.glove - ARM_SKIN_T.forearm) * (p.y + 0.5), p.x / 0.045));
+      }
+      loadBodySkin(bodyUrl).then(
+        ({ texture }) => {
+          if (this.disposed) { texture.dispose(); return; }
+          applyBodySkin([gloveMat, armMat], texture);
+          this.disposables.push(texture);
+        },
+        (e: unknown) => console.warn('전신 스킨을 불러오지 못해 팔레트 색으로 표시합니다', e),
+      );
     }
   }
 
@@ -135,12 +161,16 @@ export class FirstPersonRig {
   }
 
   dispose(): void {
+    this.disposed = true;
+    const mats = new Set<THREE.Material>();
     this.rig.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.isMesh) {
         m.geometry.dispose();
-        (m.material as THREE.Material).dispose();
+        mats.add(m.material as THREE.Material);
       }
     });
+    mats.forEach((m) => m.dispose());
+    this.disposables.forEach((d) => d.dispose());
   }
 }

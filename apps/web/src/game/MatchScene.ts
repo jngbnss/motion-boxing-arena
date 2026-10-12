@@ -33,8 +33,7 @@ export class MatchScene {
     opts.container.appendChild(this.view.domElement);
     this.disposeArena = buildArena(this.scene);
 
-    const gloveColor = opts.player.skin?.palette[3] ?? '#e8231a';
-    this.fp = new FirstPersonRig(opts.stance, gloveColor);
+    this.fp = new FirstPersonRig(opts.stance, opts.player.skin);
     this.fp.shake = opts.cameraShake;
     this.scene.add(this.fp.rig);
 

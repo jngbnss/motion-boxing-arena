@@ -1,4 +1,4 @@
-// 캐릭터 생성: 업로드 또는 A-pose 실루엣 템플릿 위에 그리기 → 팔레트 추출 → T0 스킨을 즉시 만든다 (C13: 항상 먼저 만든다).
+// 캐릭터 생성: 업로드 또는 A-pose 실루엣 템플릿 위에 그리기 → 팔레트 + 전신 스킨 텍스처 → T0 스킨을 즉시 만든다 (C13: 항상 먼저 만든다).
 // 서버가 설정돼 있고 권리 확인을 했으면 같은 이미지를 업로드해 AI 3D 변환(T1/T2) 작업을 요청하고 진행 상황을 폴링한다.
 import { useEffect, useRef, useState } from 'react';
 import { SKELETON_ID, UPLOAD_LIMITS, type CharacterManifest } from '@mba/shared';
@@ -7,6 +7,7 @@ import { api, ApiError, errorMessage, newIdempotencyKey } from '../../net/api.ts
 import { featureBlockedReason, useServerConfig } from '../../net/useServerConfig.ts';
 import type { Settings } from '../../settings.ts';
 import { extractPalette, toBoxerPalette } from '../../skin/palette.ts';
+import { fitToTemplate, foregroundMask, maskBounds, TEMPLATE_H, TEMPLATE_W, traceTemplate } from '../../skin/bodyTemplate.ts';
 import { BoxerPreview } from '../BoxerPreview.tsx';
 import { GenerationPanel } from '../GenerationPanel.tsx';
 
@@ -21,8 +22,11 @@ function generateErrorMessage(e: unknown): string {
   return `AI 3D 변환을 요청하지 못했어요: ${errorMessage(e)}`;
 }
 
-const W = 512;
-const H = 768;
+const W = TEMPLATE_W;
+const H = TEMPLATE_H;
+/** 전신 스킨 텍스처 크기 (템플릿의 1/2) */
+const SKIN_W = W / 2;
+const SKIN_H = H / 2;
 const COLORS = ['#111111', '#ffffff', '#e8231a', '#ff8a00', '#ffd400', '#3ddc84', '#1e88e5', '#3949ab', '#8e24aa', '#ec407a', '#8d6e63', '#9e9e9e'];
 
 function drawSilhouette(g: CanvasRenderingContext2D) {
@@ -32,16 +36,8 @@ function drawSilhouette(g: CanvasRenderingContext2D) {
   g.strokeStyle = 'rgba(80,120,255,0.45)';
   g.lineWidth = 3;
   g.setLineDash([10, 8]);
-  const cx = W / 2;
   g.beginPath();
-  g.arc(cx, 120, 62, 0, Math.PI * 2); // 머리
-  g.moveTo(cx - 90, 210); g.lineTo(cx + 90, 210); g.lineTo(cx + 75, 450); g.lineTo(cx - 75, 450); g.closePath(); // 몸통
-  for (const s of [-1, 1]) {
-    // 팔 45° (A-pose)
-    g.moveTo(cx + s * 88, 215); g.lineTo(cx + s * 215, 380); g.lineTo(cx + s * 185, 405); g.lineTo(cx + s * 80, 280); g.closePath();
-    // 다리
-    g.moveTo(cx + s * 15, 450); g.lineTo(cx + s * 75, 450); g.lineTo(cx + s * 95, 730); g.lineTo(cx + s * 40, 730); g.closePath();
-  }
+  traceTemplate(g);
   g.fill();
   g.stroke();
   g.restore();
@@ -87,19 +83,49 @@ async function imageFromFile(file: File): Promise<HTMLImageElement> {
   }
 }
 
-/** 이미지 소스 → 팔레트 + 가슴 데칼(256px JPEG) */
-function analyze(source: CanvasImageSource, w: number, h: number): { palette: string[]; decal: string } {
+/** 업로드 이미지 → 배경을 지우고 전경을 템플릿 전신 영역에 맞춘 템플릿 크기 캔버스 */
+function fitUpload(img: HTMLImageElement): HTMLCanvasElement {
+  const s = Math.min(1, 512 / Math.max(img.naturalWidth, img.naturalHeight));
+  const work = document.createElement('canvas');
+  work.width = Math.max(1, Math.round(img.naturalWidth * s));
+  work.height = Math.max(1, Math.round(img.naturalHeight * s));
+  const wg = work.getContext('2d', { willReadFrequently: true })!;
+  wg.drawImage(img, 0, 0, work.width, work.height);
+  const px = wg.getImageData(0, 0, work.width, work.height);
+  const mask = foregroundMask(px.data, work.width, work.height);
+  const found = maskBounds(mask, work.width, work.height);
+  // 분리 실패(전경이 거의 없음)면 이미지 전체를 그대로 맞춘다
+  if (found) {
+    for (let p = 0; p < mask.length; p++) if (!mask[p]) px.data[p * 4 + 3] = 0;
+    wg.putImageData(px, 0, 0);
+  }
+  const src = found ?? { x: 0, y: 0, w: work.width, h: work.height };
+  const dst = fitToTemplate(src);
+  const out = document.createElement('canvas');
+  out.width = W;
+  out.height = H;
+  out.getContext('2d')!.drawImage(work, src.x, src.y, src.w, src.h, dst.x, dst.y, dst.w, dst.h);
+  return out;
+}
+
+/** 템플릿 비율 그림 → 팔레트 + 전신 스킨 텍스처(256×384 WebP, 미지원 브라우저는 PNG). 빈 그림이면 텍스처 없음 */
+function analyze(template: HTMLCanvasElement): { palette: string[]; body: string | null } {
   const c = document.createElement('canvas');
-  c.width = 64; c.height = Math.max(1, Math.round((64 * h) / w));
+  c.width = 64;
+  c.height = 96;
   const g = c.getContext('2d', { willReadFrequently: true })!;
-  g.drawImage(source, 0, 0, c.width, c.height);
-  const palette = toBoxerPalette(extractPalette(g.getImageData(0, 0, c.width, c.height).data, { k: 4 }));
+  g.drawImage(template, 0, 0, c.width, c.height);
+  const pixels = g.getImageData(0, 0, c.width, c.height).data;
+  const palette = toBoxerPalette(extractPalette(pixels, { k: 4 }));
+  let inked = false;
+  for (let i = 3; i < pixels.length && !inked; i += 4) inked = pixels[i]! >= 128;
+  if (!inked) return { palette, body: null };
   const d = document.createElement('canvas');
-  const s = 256 / Math.max(w, h);
-  d.width = Math.round(w * s); d.height = Math.round(h * s);
-  const dg = d.getContext('2d')!;
-  dg.drawImage(source, 0, 0, d.width, d.height);
-  return { palette, decal: d.toDataURL('image/png') };
+  d.width = SKIN_W;
+  d.height = SKIN_H;
+  d.getContext('2d')!.drawImage(template, 0, 0, SKIN_W, SKIN_H);
+  const webp = d.toDataURL('image/webp', 0.9);
+  return { palette, body: webp.startsWith('data:image/webp') ? webp : d.toDataURL('image/png') };
 }
 
 export function CharacterCreateScreen({ settings, onCreated, onDone, onCancel }: {
@@ -180,7 +206,7 @@ export function CharacterCreateScreen({ settings, onCreated, onDone, onCancel }:
     setError(null);
     if (!rights) { setError('이미지에 대한 권리 확인에 체크해 주세요.'); return; }
     try {
-      let result: { palette: string[]; decal: string };
+      let result: { palette: string[]; body: string | null };
       if (tab === 'upload') {
         if (!file) { setError('이미지를 선택해 주세요.'); return; }
         if (!(UPLOAD_LIMITS.mimeTypes as readonly string[]).includes(file.type)) { setError('PNG, JPG, WebP만 업로드할 수 있어요.'); return; }
@@ -190,12 +216,12 @@ export function CharacterCreateScreen({ settings, onCreated, onDone, onCancel }:
           setError(`짧은 변이 ${UPLOAD_LIMITS.minShortSidePx}px 이상이어야 해요 (현재 ${Math.min(img.naturalWidth, img.naturalHeight)}px).`);
           return;
         }
-        result = analyze(img, img.naturalWidth, img.naturalHeight);
+        result = analyze(fitUpload(img));
         sourceBlob.current = { blob: file, filename: file.name };
       } else {
         const c = drawRef.current;
         if (!c) return;
-        result = analyze(c, W, H);
+        result = analyze(c);
         // 실루엣 밖은 이미 투명(그린 캔버스만 PNG로). 512×768이라 서버 최소 해상도(짧은 변 512)를 만족한다
         const blob = await new Promise<Blob | null>((resolve) => c.toBlob(resolve, 'image/png'));
         sourceBlob.current = blob ? { blob, filename: 'drawing.png' } : null;
@@ -209,7 +235,7 @@ export function CharacterCreateScreen({ settings, onCreated, onDone, onCancel }:
         tier: 'T0',
         glbUrl: null,
         thumbnailUrl: null,
-        skin: { palette: result.palette, decals: { chest: result.decal } },
+        skin: { palette: result.palette, decals: result.body ? { body: result.body } : {} },
         scale: 1,
         provenance: { model: 'palette-kmeans', modelVersion: '1', seed: null, rigger: 'none', createdAt: new Date().toISOString() },
         license: { userAttestedRights: true, visibility: 'private' },
@@ -254,7 +280,7 @@ export function CharacterCreateScreen({ settings, onCreated, onDone, onCancel }:
     <div className="screen">
       <h1>캐릭터 만들기</h1>
       <div className="warn-box" style={{ width: 'min(920px, 100%)' }}>
-        먼저 <b>T0 스킨</b>을 바로 만들어요(그림의 색과 이미지를 기본 복서에 입힘, 2초 이내).{' '}
+        먼저 <b>T0 스킨</b>을 바로 만들어요(그림을 기본 복서의 머리·몸통·팔·다리에 입힘, 2초 이내).{' '}
         {genBlocked
           ? <>AI 3D 변환(T1/T2): {genBlocked}</>
           : <>저장하면 같은 이미지로 <b>AI 3D 변환(T1/T2)</b>도 요청하고, 완성되면 다음 경기부터 3D 캐릭터로 바뀌어요.{server.config && !server.config.workerOnline && ' (지금은 생성 워커가 꺼져 있어 대기열에서 기다립니다.)'}</>}
@@ -267,7 +293,7 @@ export function CharacterCreateScreen({ settings, onCreated, onDone, onCancel }:
           </div>
           {tab === 'draw' ? (
             <>
-              <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>점선 실루엣(정면, 팔 45°) 안에 그리면 나중에 3D 변환 성공률이 높아져요.</p>
+              <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>점선 실루엣(정면, 팔 45°)의 머리·몸통·팔·다리 안에 그리면 그 부위에 그대로 입혀지고, 나중에 3D 변환 성공률도 높아져요. 비워 둔 곳은 그림에서 뽑은 색으로 칠해져요.</p>
               <div className="draw-wrap">
                 <canvas ref={guideRef} width={W} height={H} />
                 <canvas ref={drawRef} width={W} height={H} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
@@ -289,7 +315,7 @@ export function CharacterCreateScreen({ settings, onCreated, onDone, onCancel }:
             </>
           ) : (
             <>
-              <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>정면 전신, 단순한 배경이 좋아요. PNG/JPG/WebP, 10MB 이하, 짧은 변 512px 이상.</p>
+              <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>정면 전신, 팔을 45° 벌린 자세에 단순한 배경이 좋아요(배경은 자동으로 지우고 전신을 몸에 맞춰 입혀요). PNG/JPG/WebP, 10MB 이하, 짧은 변 512px 이상.</p>
               <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
             </>
           )}

@@ -8,8 +8,9 @@ export type Tier = (typeof TIERS)[number];
 export const SkinSchema = z.object({
   /** 이미지에서 추출한 팔레트 (#rrggbb). [주색, 보조색, 강조색, 글러브색] */
   palette: z.array(z.string().regex(/^#[0-9a-f]{6}$/i)).min(1).max(8),
-  /** 데칼 이미지 URL (가슴·트렁크 등). 로컬 T0는 data/blob URL일 수 있다 */
-  decals: z.partialRecord(z.enum(['chest', 'trunks', 'gloves', 'face']), z.string()).default({}),
+  /** 데칼 이미지 URL. 로컬 T0는 data/blob URL일 수 있다.
+   *  body = 전신 스킨: 캐릭터 생성 템플릿(512×768 A-pose 정면) 비율 이미지, 투명한 곳은 팔레트 색 (chest = 이전 버전 가슴 데칼) */
+  decals: z.partialRecord(z.enum(['chest', 'trunks', 'gloves', 'face', 'body']), z.string()).default({}),
 });
 export type Skin = z.infer<typeof SkinSchema>;
 

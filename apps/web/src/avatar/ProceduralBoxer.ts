@@ -3,11 +3,20 @@
 import * as THREE from 'three';
 import { BONES, HIT_VOLUMES, type BoneName, type CharacterManifest, type Hand, type Stance } from '@mba/shared';
 import { stepCriticalSpring, type SpringState } from '../game/spring.ts';
+import { applyBodySkin, bodySkinMaterial, loadBodySkin, setTemplateUv } from '../skin/bodySkin.ts';
+import { armPoint, headPoint, legPoint, torsoPoint } from '../skin/bodyTemplate.ts';
 import type { AvatarAction, BoxerAvatar, HitVolumes, StrikeTimeline } from './types.ts';
 
 const UPPER_ARM = 0.3;
 const FOREARM = 0.28;
+const GLOVE_R = 0.09;
 const SKIN = '#e0b48f';
+
+/** 전신 스킨 템플릿의 팔(t 0 = 어깨, 1 = 글러브 끝)에서 전완·글러브가 시작하는 위치. 1인칭 팔도 같은 구간을 쓴다 */
+export const ARM_SKIN_T = {
+  forearm: UPPER_ARM / (UPPER_ARM + FOREARM + GLOVE_R),
+  glove: (UPPER_ARM + FOREARM - GLOVE_R) / (UPPER_ARM + FOREARM + GLOVE_R),
+} as const;
 
 /** 본 레스트 오프셋 (부모 기준, 정면 +Z, 캐릭터 왼쪽 +X) */
 const REST: Record<BoneName, { parent: BoneName | null; pos: [number, number, number] }> = {
@@ -56,16 +65,25 @@ export function strikeExtension(tl: StrikeTimeline | null, now: number): { ext: 
   return { ext: 1 - smooth(p), telegraph: 0 };
 }
 
-function capsule(radius: number, length: number, color: THREE.ColorRepresentation, axis: 'x+' | 'x-' | 'y-' | 'y+'): THREE.Mesh {
+function capsule(radius: number, length: number, material: THREE.Material, axis: 'x+' | 'x-' | 'y-' | 'y+'): THREE.Mesh {
   const g = new THREE.CapsuleGeometry(radius, Math.max(0.001, length - radius * 2), 6, 12);
   const half = length / 2;
   if (axis === 'x+') { g.rotateZ(-Math.PI / 2); g.translate(half, 0, 0); }
   if (axis === 'x-') { g.rotateZ(Math.PI / 2); g.translate(-half, 0, 0); }
   if (axis === 'y-') g.translate(0, -half, 0);
   if (axis === 'y+') g.translate(0, half, 0);
-  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color, roughness: 0.6 }));
+  const m = new THREE.Mesh(g, material);
   m.castShadow = true;
   return m;
+}
+
+/** 전신 스킨 UV를 입힐 부위 메쉬 (레스트 자세 기준) */
+interface SkinParts {
+  head: THREE.Mesh;
+  neck: THREE.Mesh;
+  torso: THREE.Mesh[];
+  arms: Record<'Left' | 'Right', THREE.Mesh[]>;
+  legs: Record<'Left' | 'Right', THREE.Mesh[]>;
 }
 
 export interface ProceduralBoxerOptions {
@@ -91,6 +109,9 @@ export class ProceduralBoxer implements BoxerAvatar {
   private victoryAt: number | null = null;
   private time = 0;
   private disposables: Array<{ dispose(): void }> = [];
+  private disposed = false;
+  /** 전신 스킨 텍스처 로딩 (없으면 즉시 완료) */
+  private readonly skinReady: Promise<void> = Promise.resolve();
 
   constructor(readonly manifest: CharacterManifest, opts: ProceduralBoxerOptions = {}) {
     this.stance = opts.stance ?? 'orthodox';
@@ -112,13 +133,24 @@ export class ProceduralBoxer implements BoxerAvatar {
     this.object.scale.setScalar(manifest.scale ?? 1);
 
     const B = this.bones;
+    // T0 전신 스킨: 모든 부위 재질이 텍스처를 팔레트 색 위에 덮는다 (텍스처가 투명한 곳은 팔레트 색)
+    const bodyUrl = manifest.skin?.decals?.body;
+    const skinMats: THREE.MeshStandardMaterial[] = [];
+    const mat = (p: THREE.MeshStandardMaterialParameters) => {
+      if (!bodyUrl) return new THREE.MeshStandardMaterial(p);
+      const m = bodySkinMaterial(p);
+      skinMats.push(m);
+      return m;
+    };
     // 몸통·하체
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.15, 0.24, 16), new THREE.MeshStandardMaterial({ color: trunks, roughness: 0.5 }));
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.15, 0.24, 16), mat({ color: trunks, roughness: 0.5 }));
     trunk.position.y = -0.02;
     B.Hips.add(trunk);
-    B.Spine1.add(capsule(0.17, 0.42, shirt, 'y+').translateY(-0.12));
+    const chest = capsule(0.17, 0.42, mat({ color: shirt, roughness: 0.6 }), 'y+').translateY(-0.12);
+    B.Spine1.add(chest);
     const chestDecal = manifest.skin?.decals?.chest;
-    if (chestDecal) {
+    if (chestDecal && !bodyUrl) {
+      // 전신 스킨 이전에 만든 T0 캐릭터: 가슴 데칼
       const tex = new THREE.TextureLoader().load(chestDecal);
       tex.colorSpace = THREE.SRGBColorSpace;
       const plane = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.2), new THREE.MeshStandardMaterial({ map: tex, transparent: true }));
@@ -126,8 +158,9 @@ export class ProceduralBoxer implements BoxerAvatar {
       B.Spine2.add(plane);
       this.disposables.push(tex);
     }
-    B.Neck.add(capsule(0.06, 0.12, SKIN, 'y+'));
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 24, 16), new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.7 }));
+    const neck = capsule(0.06, 0.12, mat({ color: SKIN, roughness: 0.6 }), 'y+');
+    B.Neck.add(neck);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 24, 16), mat({ color: SKIN, roughness: 0.7 }));
     head.position.y = 0.07;
     head.castShadow = true;
     B.Head.add(head);
@@ -135,32 +168,103 @@ export class ProceduralBoxer implements BoxerAvatar {
     band.rotation.x = Math.PI / 2;
     band.position.y = 0.11;
     B.Head.add(band);
+    const eyes: THREE.Mesh[] = [];
     for (const sx of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 8), new THREE.MeshStandardMaterial({ color: '#111' }));
       eye.position.set(sx * 0.04, 0.08, 0.108);
       B.Head.add(eye);
+      eyes.push(eye);
     }
-    // 팔
-    const mkGlove = (color: string) => new THREE.MeshStandardMaterial({ color, roughness: 0.35, emissive: new THREE.Color('#ffb020'), emissiveIntensity: 0 });
+    // 팔·다리
+    const mkGlove = (color: string) => mat({ color, roughness: 0.35, emissive: new THREE.Color('#ffb020'), emissiveIntensity: 0 });
     this.gloveMats = { left: mkGlove(gloves), right: mkGlove(gloves) };
+    const parts: SkinParts = { head, neck, torso: [trunk, chest], arms: { Left: [], Right: [] }, legs: { Left: [], Right: [] } };
     for (const side of ['Left', 'Right'] as const) {
       const ax = side === 'Left' ? 'x+' : 'x-';
-      B[`${side}Arm`].add(capsule(0.055, UPPER_ARM, SKIN, ax));
-      B[`${side}ForeArm`].add(capsule(0.05, FOREARM, SKIN, ax));
-      const glove = new THREE.Mesh(new THREE.SphereGeometry(0.09, 18, 14), this.gloveMats[side === 'Left' ? 'left' : 'right']);
+      const upper = capsule(0.055, UPPER_ARM, mat({ color: SKIN, roughness: 0.6 }), ax);
+      B[`${side}Arm`].add(upper);
+      const fore = capsule(0.05, FOREARM, mat({ color: SKIN, roughness: 0.6 }), ax);
+      B[`${side}ForeArm`].add(fore);
+      const glove = new THREE.Mesh(new THREE.SphereGeometry(GLOVE_R, 18, 14), this.gloveMats[side === 'Left' ? 'left' : 'right']);
       glove.scale.set(1, 0.95, 1.15);
       glove.castShadow = true;
       B[`${side}Hand`].add(glove);
-      B[`${side}UpLeg`].add(capsule(0.075, 0.44, SKIN, 'y-'));
-      B[`${side}Leg`].add(capsule(0.06, 0.43, SKIN, 'y-'));
-      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.08, 0.22), new THREE.MeshStandardMaterial({ color: accent }));
+      const thigh = capsule(0.075, 0.44, mat({ color: SKIN, roughness: 0.6 }), 'y-');
+      B[`${side}UpLeg`].add(thigh);
+      const shin = capsule(0.06, 0.43, mat({ color: SKIN, roughness: 0.6 }), 'y-');
+      B[`${side}Leg`].add(shin);
+      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.08, 0.22), mat({ color: accent }));
       shoe.position.set(0, -0.03, 0.05);
       B[`${side}Foot`].add(shoe);
+      parts.arms[side] = [upper, fore, glove];
+      parts.legs[side] = [thigh, shin, shoe];
+    }
+
+    if (bodyUrl) {
+      this.mapBodySkin(parts);
+      this.skinReady = loadBodySkin(bodyUrl).then(
+        ({ texture, drawnFace }) => {
+          if (this.disposed) { texture.dispose(); return; }
+          applyBodySkin(skinMats, texture);
+          this.disposables.push(texture);
+          // 그림이 머리를 덮으므로 헤드밴드는 숨기고, 얼굴을 그렸으면 기본 눈도 숨긴다
+          band.visible = false;
+          for (const e of eyes) e.visible = !drawnFace;
+        },
+        (e: unknown) => console.warn('전신 스킨을 불러오지 못해 팔레트 색으로 표시합니다', e),
+      );
+    }
+  }
+
+  /**
+   * 레스트 자세(T자, 정면 +Z)에서 각 부위 정점을 정면으로 평면 투영해 A-pose 템플릿 좌표로 UV를 정한다.
+   * 뒷면은 같은 좌표(=좌우 거울)를 쓴다. 팔은 T자 ↔ 템플릿 45° 차이를 부위 축 기준 좌표(t, n)로 흡수한다.
+   */
+  private mapBodySkin(parts: SkinParts): void {
+    this.object.updateMatrixWorld(true);
+    const toBody = this.body.matrixWorld.clone().invert();
+    const rel = (m: THREE.Mesh) => toBody.clone().multiply(m.matrixWorld);
+    const box = (meshes: readonly THREE.Mesh[]) => {
+      const b = new THREE.Box3();
+      for (const m of meshes) {
+        m.geometry.computeBoundingBox();
+        b.union(m.geometry.boundingBox!.clone().applyMatrix4(rel(m)));
+      }
+      return b;
+    };
+
+    const hb = box([parts.head]);
+    const hc = hb.getCenter(new THREE.Vector3());
+    const hr = (hb.max.x - hb.min.x) / 2;
+    for (const m of [parts.head, parts.neck]) setTemplateUv(m.geometry, rel(m), (p) => headPoint((p.x - hc.x) / hr, (p.y - hc.y) / hr));
+
+    const tb = box(parts.torso);
+    for (const m of parts.torso) setTemplateUv(m.geometry, rel(m), (p) => torsoPoint((tb.max.y - p.y) / (tb.max.y - tb.min.y), p.x / tb.max.x));
+
+    for (const side of ['Left', 'Right'] as const) {
+      const s = side === 'Left' ? 1 : -1;
+      const ab = box(parts.arms[side]);
+      const inner = s > 0 ? ab.min.x : -ab.max.x;
+      const outer = s > 0 ? ab.max.x : -ab.min.x;
+      for (const m of parts.arms[side]) {
+        const mb = box([m]);
+        const cy = (mb.max.y + mb.min.y) / 2, hy = (mb.max.y - mb.min.y) / 2;
+        setTemplateUv(m.geometry, rel(m), (p) => armPoint(s, (s * p.x - inner) / (outer - inner), (p.y - cy) / hy));
+      }
+      // 다리 윗부분은 트렁크에 가려지므로 트렁크 아래부터 발바닥까지를 템플릿 다리에 맞춘다
+      const lb = box(parts.legs[side]);
+      const top = tb.min.y;
+      for (const m of parts.legs[side]) {
+        const mb = box([m]);
+        const cx = (mb.max.x + mb.min.x) / 2, hx = (mb.max.x - mb.min.x) / 2;
+        setTemplateUv(m.geometry, rel(m), (p) => legPoint(s, (top - p.y) / (top - lb.min.y), (s * (p.x - cx)) / hx));
+      }
     }
   }
 
   async load(): Promise<void> {
-    /* 절차적 모델: 로딩할 에셋 없음. GLB 아바타(T1/T2)는 GltfBoxer */
+    /* 절차적 모델: T0 전신 스킨 텍스처만 기다린다. GLB 아바타(T1/T2)는 GltfBoxer */
+    await this.skinReady;
   }
 
   /** 모든 본을 레스트 자세로 (리타깃 기준 측정용) */
@@ -362,6 +466,7 @@ export class ProceduralBoxer implements BoxerAvatar {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.object.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.isMesh) {
